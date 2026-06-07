@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>智慧工厂安全监测控制平台</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#04080F;font-family:'Courier New',monospace;}
+::-webkit-scrollbar{width:4px;background:#04080F;}
+::-webkit-scrollbar-thumb{background:#0D2137;}
+button{cursor:pointer;font-family:'Courier New',monospace;}
+@keyframes blink{50%{opacity:0;}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef}=React;
+const C={bg:"#04080F",panel:"#080E1A",border:"#0D2137",accent:"#00C8FF",accentDim:"#004A63",green:"#00FF88",greenDim:"#003322",yellow:"#FFD700",red:"#FF3333",redDim:"#330000",orange:"#FF8C00",text:"#B0C8D8",textBright:"#E8F4FF",grid:"rgba(0,200,255,0.04)"};
+function useInterval(fn,ms){const ref=useRef(fn);useEffect(()=>{ref.current=fn;});useEffect(()=>{const t=setInterval(()=>ref.current(),ms);return()=>clearInterval(t);},[ms]);}
+function rand(min,max,dec=1){return parseFloat((Math.random()*(max-min)+min).toFixed(dec));}
+function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
+function Sparkline({data,color,height=36}){
+  if(!data||data.length<2)return null;
+  const w=120,h=height,mn=Math.min(...data),mx=Math.max(...data),range=mx-mn||1;
+  const pts=data.map((v,i)=>`${(i/(data.length-1))*w},${h-((v-mn)/range)*(h-4)-2}`);
+  return(<svg width={w} height={h} style={{display:"block"}}><path d={`M0,${h} L${pts.join(" L")} L${w},${h} Z`} fill={color} opacity="0.12"/><polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round"/></svg>);
+}
+function ArcGauge({value,max,color,size=80,label,unit}){
+  const r=size/2-8,cx=size/2,cy=size/2,startAngle=-210,sweep=240,pct=clamp(value/max,0,1);
+  const toRad=d=>(d*Math.PI)/180;
+  const arcPt=deg=>{const rad=toRad(startAngle+deg);return`${cx+r*Math.cos(rad)},${cy+r*Math.sin(rad)}`;};
+  const fs=pct*sweep,la=fs>180?1:0;
+  return(<svg width={size} height={size} style={{display:"block"}}>
+    <path d={`M ${arcPt(0)} A ${r} ${r} 0 1 1 ${arcPt(sweep)}`} fill="none" stroke="#0D2137" strokeWidth="6" strokeLinecap="round"/>
+    <path d={`M ${arcPt(0)} A ${r} ${r} 0 ${la} 1 ${arcPt(fs)}`} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" style={{filter:`drop-shadow(0 0 4px ${color})`}}/>
+    <text x={cx} y={cy-4} textAnchor="middle" fill={color} fontSize="14" fontWeight="700" fontFamily="Courier New">{typeof value==="number"?value.toFixed(value<10?1:0):value}</text>
+    <text x={cx} y={cy+10} textAnchor="middle" fill={C.text} fontSize="8" fontFamily="Courier New">{unit}</text>
+    <text x={cx} y={cy+22} textAnchor="middle" fill={C.text} fontSize="7" fontFamily="Courier New">{label}</text>
+  </svg>);
+}
+function Panel({title,children,style={},alert=false,icon=""}){
+  return(<div style={{background:C.panel,border:`1px solid ${alert?C.red:C.border}`,borderRadius:4,padding:"10px 12px",position:"relative",overflow:"hidden",boxShadow:alert?`0 0 16px ${C.red}44`:"none",...style}}>
+    <div style={{position:"absolute",top:0,left:0,width:24,height:24,borderTop:`2px solid ${alert?C.red:C.accent}`,borderLeft:`2px solid ${alert?C.red:C.accent}`}}/>
+    <div style={{position:"absolute",bottom:0,right:0,width:24,height:24,borderBottom:`2px solid ${alert?C.red:C.accent}`,borderRight:`2px solid ${alert?C.red:C.accent}`}}/>
+    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+      {icon&&<span style={{fontSize:12}}>{icon}</span>}
+      <span style={{fontSize:10,fontFamily:"'Courier New',monospace",letterSpacing:2,color:alert?C.red:C.accent,textTransform:"uppercase",fontWeight:700}}>{title}</span>
+      {alert&&<span style={{marginLeft:"auto",fontSize:9,color:C.red,animation:"blink 1s step-end infinite"}}>● ALERT</span>}
+    </div>
+    {children}
+  </div>);
+}
+function Dot({color}){return<span style={{display:"inline-block",width:7,height:7,borderRadius:"50%",background:color,boxShadow:`0 0 6px ${color}`,marginRight:5}}/>;}
+function FactoryMap({temp,humid,smoke,co,gas,light,agvDist,agvStatus,count}){
+  const [agvX,setAgvX]=useState(80);
+  const [agvY,setAgvY]=useState(155);
+  const agvRef=useRef({x:80,y:155,dir:1,dy:0.2});
+  useInterval(()=>{
+    const s=agvRef.current;
+    const speed=agvStatus==="SLOW"?0.8:agvStatus==="STOPPED"?0:1.6;
+    s.x+=s.dir*speed;s.y+=s.dy;
+    if(s.x>520||s.x<60)s.dir*=-1;
+    if(s.y>185||s.y<125)s.dy*=-1;
+    setAgvX(s.x);setAgvY(s.y);
+  },60);
+  const agvColor=agvStatus==="RUNNING"?"#00FF88":agvStatus==="SLOW"?"#FFD700":"#FF3333";
+  const dg=smoke>40||co>35||gas>30;
+  return(<svg viewBox="0 0 600 230" style={{width:"100%",background:"#04080F",borderRadius:3,border:`1px solid ${C.border}`}}>
+    {Array.from({length:13},(_,i)=><line key={`v${i}`} x1={i*50} y1="0" x2={i*50} y2="230" stroke={C.grid} strokeWidth="1"/>)}
+    {Array.from({length:5},(_,i)=><line key={`h${i}`} x1="0" y1={i*50} x2="600" y2={i*50} stroke={C.grid} strokeWidth="1"/>)}
+    <rect x="10" y="10" width="580" height="210" fill="none" stroke={C.border} strokeWidth="2" rx="2"/>
+    <rect x="20" y="20" width="140" height="90" fill="#080E1A" stroke={C.accentDim} strokeWidth="1" rx="2"/>
+    <text x="90" y="36" textAnchor="middle" fill={C.accent} fontSize="8" fontFamily="Courier New">ZONE-A 环境监测区</text>
+    <circle cx="60" cy="68" r="16" fill="#04080F" stroke={temp>32?C.red:C.accent} strokeWidth="1.5"/>
+    <text x="60" y="65" textAnchor="middle" fill={temp>32?C.red:C.accent} fontSize="6" fontFamily="Courier New">TEMP</text>
+    <text x="60" y="76" textAnchor="middle" fill={C.textBright} fontSize="8" fontFamily="Courier New" fontWeight="700">{temp.toFixed(1)}°</text>
+    <circle cx="115" cy="68" r="16" fill="#04080F" stroke={C.green} strokeWidth="1.5"/>
+    <text x="115" y="65" textAnchor="middle" fill={C.green} fontSize="6" fontFamily="Courier New">HUM</text>
+    <text x="115" y="76" textAnchor="middle" fill={C.textBright} fontSize="8" fontFamily="Courier New" fontWeight="700">{humid.toFixed(0)}%</text>
+    <rect x="170" y="20" width="130" height="90" fill={dg?"#200808":"#080E1A"} stroke={dg?C.red:"#1A2030"} strokeWidth="1" rx="2"/>
+    <text x="235" y="36" textAnchor="middle" fill={dg?C.red:C.text} fontSize="8" fontFamily="Courier New">ZONE-B 危气监测区</text>
+    {[{cx:200,label:"SMOKE",val:smoke.toFixed(0),c:smoke>40?C.red:C.yellow},{cx:242,label:"CO",val:co.toFixed(0),c:co>35?C.red:C.orange},{cx:284,label:"GAS",val:gas.toFixed(0),c:gas>30?C.red:C.green}].map(({cx,label,val,c})=>(
+      <g key={label}><circle cx={cx} cy="68" r="14" fill="#04080F" stroke={c} strokeWidth="1.5"/><text x={cx} y="65" textAnchor="middle" fill={c} fontSize="6" fontFamily="Courier New">{label}</text><text x={cx} y="75" textAnchor="middle" fill={C.textBright} fontSize="8" fontFamily="Courier New" fontWeight="700">{val}</text></g>
+    ))}
+    <rect x="310" y="20" width="270" height="90" fill="#080E1A" stroke="#1A2030" strokeWidth="1" rx="2"/>
+    <text x="445" y="36" textAnchor="middle" fill={C.text} fontSize="8" fontFamily="Courier New">ZONE-C 生产线区</text>
+    <rect x="320" y="60" width="250" height="12" fill="#0D2137" stroke={C.border} strokeWidth="1" rx="1"/>
+    {[330,355,380,405,430,455,480,505,530,555].map(x=><line key={x} x1={x} y1="60" x2={x} y2="72" stroke={C.border} strokeWidth="1"/>)}
+    {[345,395,455,515].map(x=><rect key={x} x={x-8} y={62} width={14} height={8} fill={C.accentDim} stroke={C.accent} strokeWidth="0.5" rx="1"/>)}
+    <rect x="540" y="55" width="5" height="22" fill={C.accent} opacity="0.7" rx="1"/>
+    <line x1="542" y1="66" x2="320" y2="66" stroke={C.accent} strokeWidth="0.5" strokeDasharray="4,3" opacity="0.3"/>
+    <text x="430" y="88" textAnchor="middle" fill={C.accent} fontSize="7" fontFamily="Courier New">光电计数: {count.toLocaleString()} 件</text>
+    <circle cx="385" cy="35" r="8" fill={light?"#FFD70044":"#04080F"} stroke={light?C.yellow:C.border} strokeWidth="1"/>
+    <text x="385" y="39" textAnchor="middle" fontSize="9">{light?"💡":"🌑"}</text>
+    <text x="385" y="52" textAnchor="middle" fill={light?C.yellow:C.text} fontSize="6" fontFamily="Courier New">{light?"ON":"OFF"}</text>
+    <rect x="20" y="118" width="560" height="95" fill="#04080F" stroke="#0D1825" strokeWidth="1" rx="2"/>
+    <text x="300" y="132" textAnchor="middle" fill={C.text} fontSize="8" fontFamily="Courier New">ZONE-D AGV 物料运输通道</text>
+    <line x1="40" y1="155" x2="560" y2="155" stroke="#0D2137" strokeWidth="1" strokeDasharray="10,6"/>
+    <line x1="40" y1="195" x2="560" y2="195" stroke="#0D2137" strokeWidth="1" strokeDasharray="10,6"/>
+    {agvStatus!=="STOPPED"&&<ellipse cx={agvX+agvRef.current.dir*22} cy={agvY} rx={Math.max(5,agvDist*0.12)} ry="7" fill="none" stroke={agvColor} strokeWidth="0.5" opacity="0.5"/>}
+    <g transform={`translate(${agvX},${agvY})`}>
+      <rect x="-20" y="-11" width="40" height="22" fill="#080E1A" stroke={agvColor} strokeWidth="1.5" rx="3" style={{filter:`drop-shadow(0 0 4px ${agvColor})`}}/>
+      <text x="0" y="4" textAnchor="middle" fill={agvColor} fontSize="7" fontFamily="Courier New">AGV</text>
+      {[[-16,11],[16,11],[-16,-11],[16,-11]].map(([wx,wy],i)=><circle key={i} cx={wx} cy={wy} r="3.5" fill="#0D2137" stroke={agvColor} strokeWidth="1"/>)}
+      <polygon points={`${agvRef.current.dir*22},0 ${agvRef.current.dir*16},-4 ${agvRef.current.dir*16},4`} fill={agvColor} opacity="0.8"/>
+    </g>
+    <text x={agvX} y={agvY-17} textAnchor="middle" fill={agvColor} fontSize="7" fontFamily="Courier New">{agvStatus} | {agvDist.toFixed(0)}cm</text>
+    <text x="15" y="225" fill={C.text} fontSize="6" fontFamily="Courier New" opacity="0.5">诚迈科技 · 智慧工厂平台 · 统信UOS</text>
+    <text x="585" y="225" textAnchor="end" fill={C.accent} fontSize="6" fontFamily="Courier New" opacity="0.7">● LIVE</text>
+  </svg>);
+      }
+  function App(){
+  const [temp,setTemp]=useState(24.5);
+  const [humid,setHumid]=useState(58.2);
+  const [smoke,setSmoke]=useState(12);
+  const [co,setCo]=useState(8);
+  const [gas,setGas]=useState(5);
+  const [light,setLight]=useState(true);
+  const [agvDist,setAgvDist]=useState(85);
+  const [agvStatus,setAgvStatus]=useState("RUNNING");
+  const [count,setCount]=useState(1247);
+  const [countRate,setCountRate]=useState(3.2);
+  const [tempH,setTempH]=useState(()=>Array.from({length:20},()=>rand(22,27)));
+  const [humidH,setHumidH]=useState(()=>Array.from({length:20},()=>rand(54,65)));
+  const [smokeH,setSmokeH]=useState(()=>Array.from({length:20},()=>rand(8,20)));
+  const [countH,setCountH]=useState(()=>Array.from({length:20},()=>rand(2,5)));
+  const [alerts,setAlerts]=useState([]);
+  const [systemTime,setSystemTime]=useState(new Date());
+  const [agvOverride,setAgvOverride]=useState(false);
+  const [lightOverride,setLightOverride]=useState(false);
+  const uptime=useRef(0);
+  const [uptimeStr,setUptimeStr]=useState("00:00:00");
+  useInterval(()=>{
+    const t=clamp(temp+rand(-0.3,0.3),18,38),h=clamp(humid+rand(-0.5,0.5),40,80),s=clamp(smoke+rand(-2,2),5,80),c=clamp(co+rand(-1,1.5),3,60),g=clamp(gas+rand(-1,1.5),2,50),d=clamp(agvDist+rand(-10,10),10,200),cr=clamp(countRate+rand(-0.2,0.2),1,6);
+    setTemp(t);setHumid(h);setSmoke(s);setCo(c);setGas(g);setAgvDist(d);setCountRate(cr);
+    setCount(p=>p+(Math.random()>0.5?1:0));
+    setTempH(p=>[...p.slice(-19),t]);setHumidH(p=>[...p.slice(-19),h]);setSmokeH(p=>[...p.slice(-19),s]);setCountH(p=>[...p.slice(-19),cr]);
+    if(!lightOverride)setLight(Math.random()>0.3);
+    if(!agvOverride){if(d<30)setAgvStatus("OBSTACLE");else if(d<60)setAgvStatus("SLOW");else setAgvStatus("RUNNING");}
+    const ts=new Date().toLocaleTimeString("zh-CN"),na=[];
+    if(s>40)na.push({id:Date.now(),time:ts,level:"CRITICAL",msg:`烟雾浓度异常: ${s.toFixed(0)} ppm`});
+    if(c>35)na.push({id:Date.now()+1,time:ts,level:"CRITICAL",msg:`CO浓度超限: ${c.toFixed(0)} ppm`});
+    if(g>30)na.push({id:Date.now()+2,time:ts,level:"WARNING",msg:`可燃气体泄漏: ${g.toFixed(0)}%LEL`});
+    if(t>32)na.push({id:Date.now()+3,time:ts,level:"WARNING",msg:`温度偏高: ${t.toFixed(1)}°C`});
+    if(d<30)na.push({id:Date.now()+4,time:ts,level:"WARNING",msg:`AGV障碍物: ${d.toFixed(0)}cm`});
+    if(na.length)setAlerts(p=>[...na,...p].slice(0,12));
+  },1800);
+  useInterval(()=>{
+    setSystemTime(new Date());uptime.current+=1;
+    const hh=String(Math.floor(uptime.current/3600)).padStart(2,"0"),mm=String(Math.floor((uptime.current%3600)/60)).padStart(2,"0"),ss=String(uptime.current%60).padStart(2,"0");
+    setUptimeStr(`${hh}:${mm}:${ss}`);
+  },1000);
+  const dg=smoke>40||co>35||gas>30,da=agvStatus==="OBSTACLE",dt=temp>32||temp<18;
+  const agvColor=agvStatus==="RUNNING"?C.green:agvStatus==="SLOW"?C.yellow:C.red;
+  function toggleAgv(){setAgvOverride(true);setAgvStatus(p=>p==="STOPPED"?"RUNNING":"STOPPED");setTimeout(()=>setAgvOverride(false),5000);}
+  function toggleLight(){setLightOverride(true);setLight(p=>!p);setTimeout(()=>setLightOverride(false),5000);}
+  return(
+    <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Courier New',monospace",color:C.text,padding:"10px",userSelect:"none"}}>
+      <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,pointerEvents:"none",zIndex:999,background:"repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px)"}}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",alignItems:"center",marginBottom:10,borderBottom:`1px solid ${C.border}`,paddingBottom:8}}>
+        <div>
+          <div style={{fontSize:9,color:C.accent,letterSpacing:3}}>OS: 统信 UOS 专业版 V20</div>
+          <div style={{fontSize:9,color:C.text}}>KERNEL: Linux 5.10.0-aarch64 &nbsp;|&nbsp; UPTIME: {uptimeStr}</div>
+        </div>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:16,fontWeight:900,color:C.textBright,letterSpacing:4,textShadow:`0 0 20px ${C.accent}`}}>智慧工厂安全监测控制平台</div>
+          <div style={{fontSize:8,color:C.accent,letterSpacing:3}}>SMART FACTORY SAFETY MONITORING & CONTROL SYSTEM</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:18,color:C.textBright,fontWeight:700}}>{systemTime.toLocaleTimeString("zh-CN")}</div>
+          <div style={{fontSize:9,color:C.text}}>{systemTime.toLocaleDateString("zh-CN",{year:"numeric",month:"long",day:"numeric",weekday:"long"})}</div>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"220px 1fr 220px",gap:8}}>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <Panel title="温湿度监控" icon="🌡️" alert={dt}>
+            <div style={{display:"flex",justifyContent:"space-around",marginBottom:6}}>
+              <ArcGauge value={temp} max={50} color={temp>32?C.red:C.accent} label="温度" unit="°C"/>
+              <ArcGauge value={humid} max={100} color={C.green} label="湿度" unit="%"/>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <div style={{flex:1}}><div style={{fontSize:8,color:C.text,marginBottom:2}}>温度趋势</div><Sparkline data={tempH} color={temp>32?C.red:C.accent}/></div>
+              <div style={{flex:1}}><div style={{fontSize:8,color:C.text,marginBottom:2}}>湿度趋势</div><Sparkline data={humidH} color={C.green}/></div>
+            </div>
+            <div style={{marginTop:6,display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,fontSize:9}}>
+              <div style={{background:"#04080F",padding:"3px 6px",borderRadius:2}}><span style={{color:C.text}}>设定 </span><span style={{color:C.yellow}}>22~28°C</span></div>
+              <div style={{background:"#04080F",padding:"3px 6px",borderRadius:2}}><span style={{color:C.text}}>设定 </span><span style={{color:C.yellow}}>45~65%</span></div>
+            </div>
+          </Panel>
+          <Panel title="红外感应照明" icon="💡">
+            <div style={{textAlign:"center",padding:"8px 0"}}>
+              <div style={{width:56,height:56,borderRadius:"50%",margin:"0 auto 8px",background:light?`radial-gradient(circle,${C.yellow}88,${C.yellow}22)`:"#0D2137",border:`2px solid ${light?C.yellow:C.border}`,boxShadow:light?`0 0 24px ${C.yellow}66`:"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,transition:"all 0.4s"}}>💡</div>
+              <div style={{fontSize:11,color:light?C.yellow:C.text,fontWeight:700,marginBottom:4}}>{light?"照明开启":"照明关闭"}</div>
+              <div style={{fontSize:9,color:C.text,marginBottom:8}}>模式: {lightOverride?"手动":"红外自动"} &nbsp;|&nbsp; <span style={{color:light?C.green:C.text}}>{light?"有人感应":"无人待机"}</span></div>
+              <button onClick={toggleLight} style={{background:lightOverride?C.accentDim:"transparent",border:`1px solid ${C.accent}`,color:C.accent,padding:"4px 14px",borderRadius:2,fontSize:9,letterSpacing:1}}>{light?"远程关灯":"远程开灯"}</button>
+            </div>
+          </Panel>
+          <Panel title="系统状态" icon="🖥️">
+            <div 
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <Panel title="工厂车间平面监控图" icon="🏭" style={{flex:1}}>
+            <FactoryMap temp={temp} humid={humid} smoke={smoke} co={co} gas={gas} light={light} agvDist={agvDist} agvStatus={agvStatus} count={count}/>
+          </Panel>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <Panel title="AGV 避障系统" icon="🤖" alert={da}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <ArcGauge value={agvDist} max={200} color={agvColor} label="避障距离" unit="cm" size={84}/>
+                <div style={{flex:1}}>
+                  <div style={{marginBottom:6}}><Dot color={agvColor}/><span style={{fontSize:11,color:agvColor,fontWeight:700}}>{agvStatus}</span></div>
+                  <div style={{fontSize:9,color:C.text,lineHeight:1.8}}>超声波测距<br/>安全阈值: <span style={{color:C.yellow}}>≥60cm</span><br/>减速区域: <span style={{color:C.yellow}}>30~60cm</span><br/>紧急停车: <span style={{color:C.red}}>&lt;30cm</span></div>
+                  <button onClick={toggleAgv} style={{marginTop:6,background:agvStatus==="STOPPED"?C.greenDim:C.redDim,border:`1px solid ${agvStatus==="STOPPED"?C.green:C.red}`,color:agvStatus==="STOPPED"?C.green:C.red,padding:"3px 10px",borderRadius:2,fontSize:9,letterSpacing:1}}>{agvStatus==="STOPPED"?"▶ 启动AGV":"■ 急停AGV"}</button>
+                </div>
+              </div>
+            </Panel>
+            <Panel title="货物感应计数" icon="📦">
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:36,fontWeight:900,color:C.accent,textShadow:`0 0 16px ${C.accent}`,lineHeight:1}}>{count.toLocaleString()}</div>
+                <div style={{fontSize:9,color:C.text,marginBottom:8}}>件 &nbsp;/&nbsp; 今日总计</div>
+                <div style={{display:"flex",justifyContent:"center",gap:16,marginBottom:8}}>
+                  <div><div style={{fontSize:14,color:C.green,fontWeight:700}}>{countRate.toFixed(1)}</div><div style={{fontSize:8,color:C.text}}>件/分钟</div></div>
+                  <div><div style={{fontSize:14,color:C.yellow,fontWeight:700}}>{(countRate*60).toFixed(0)}</div><div style={{fontSize:8,color:C.text}}>预测/小时</div></div>
+                </div>
+                <Sparkline data={countH} color={C.accent} height={28}/>
+                <div style={{fontSize:9,color:C.text,marginTop:4}}>光电传感器 · 检测精度 99.8%</div>
+              </div>
+            </Panel>
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <Panel title="危险气体监测" icon="⚠️" alert={dg}>
+            <div style={{display:"flex",justifyContent:"space-around",marginBottom:6}}>
+              <ArcGauge value={smoke} max={100} color={smoke>40?C.red:C.yellow} label="烟雾" unit="ppm"/>
+              <ArcGauge value={co} max={100} color={co>35?C.red:C.orange} label="CO" unit="ppm"/>
+              <ArcGauge value={gas} max={100} color={gas>30?C.red:C.green} label="可燃气" unit="%LEL"/>
+            </div>
+            {[{label:"烟雾 SMOKE",val:smoke,alarm:40,color:C.yellow},{label:"一氧化碳 CO",val:co,alarm:35,color:C.orange},{label:"可燃气 GAS",val:gas,alarm:30,color:C.green}].map(({label,val,alarm,color})=>(
+              <div key={label} style={{marginBottom:6}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:8,marginBottom:2}}><span style={{color:C.text}}>{label}</span><span style={{color:val>alarm?C.red:color}}>{val.toFixed(1)} {val>alarm?"⚠ 超限":"正常"}</span></div>
+                <div style={{background:C.border,borderRadius:2,height:4,overflow:"hidden"}}><div style={{width:`${val}%`,height:"100%",background:val>alarm?C.red:color,transition:"width 0.5s",boxShadow:val>alarm?`0 0 6px ${C.red}`:"none"}}/></div>
+              </div>
+            ))}
+            <div style={{marginTop:4}}><div style={{fontSize:8,color:C.text,marginBottom:2}}>烟雾历史趋势</div><Sparkline data={smokeH} color={C.yellow} height={28}/></div>
+          </Panel>
+          <Panel title="实时告警日志" icon="🔔" style={{flex:1}}>
+            <div style={{overflowY:"auto",maxHeight:200}}>
+              {alerts.length===0?(<div style={{textAlign:"center",color:C.green,fontSize:9,padding:"20px 0"}}><Dot color={C.green}/>系统运行正常，暂无告警</div>):alerts.map((a,i)=>(
+                <div key={a.id+i} style={{background:a.level==="CRITICAL"?`${C.red}11`:`${C.yellow}11`,border:`1px solid ${a.level==="CRITICAL"?C.red+"44":C.yellow+"44"}`,borderRadius:2,padding:"3px 6px",fontSize:8,marginBottom:3}}>
+                  <span style={{color:a.level==="CRITICAL"?C.red:C.yellow}}>[{a.level}]</span>
+                  <span style={{color:C.text,marginLeft:4}}>{a.time}</span>
+                  <div style={{color:C.textBright,marginTop:1}}>{a.msg}</div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+          <Panel title="远程控制面板" icon="🎛️">
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+              {[{label:"消防喷淋",icon:"🚿",color:C.accent},{label:"紧急广播",icon:"📢",color:C.red},{label:"排风系统",icon:"💨",color:C.green},{label:"封锁门禁",icon:"🔒",color:C.orange}].map(({label,icon,color})=>(
+                <button key={label} style={{background:"transparent",border:`1px solid ${color}44`,color,padding:"6px 4px",borderRadius:2,fontSize:9,letterSpacing:1,textAlign:"center",transition:"all 0.2s"}}
+                  onMouseOver={e=>{e.currentTarget.style.background=color+"22";e.currentTarget.style.borderColor=color;}}
+                  onMouseOut={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.borderColor=color+"44";}}>
+                  <div style={{fontSize:14}}>{icon}</div><div>{label}</div>
+                </button>
+              ))}
+            </div>
+            <div style={{marginTop:8,padding:"4px 6px",background:"#04080F",borderRadius:2,fontSize:9,color:C.text}}><Dot color={C.green}/>已建立安全加密通道 &nbsp; AES-256</div>
+          </Panel>
+        </div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
